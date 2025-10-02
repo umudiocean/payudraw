@@ -1,13 +1,19 @@
 import { configureChains, createConfig } from 'wagmi'
 import { bsc } from 'wagmi/chains'
-import { publicProvider } from 'wagmi/providers/public'
+import { jsonRpcProvider } from 'wagmi/providers/jsonRpc'
 import { getDefaultWallets } from '@rainbow-me/rainbowkit'
 
 const projectId = 'c1814df663b82b65bb5927ad59566843'
 
 const { chains, publicClient, webSocketPublicClient } = configureChains(
   [bsc], 
-  [publicProvider()]
+  [
+    jsonRpcProvider({
+      rpc: () => ({
+        http: 'https://bsc-dataseed1.binance.org',
+      }),
+    }),
+  ]
 )
 
 const { connectors } = getDefaultWallets({

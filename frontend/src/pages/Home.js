@@ -26,10 +26,14 @@ const Home = () => {
     hash: txHash,
   })
   
+  // Track if we've already attempted registration for this address
+  const [registrationAttempted, setRegistrationAttempted] = React.useState(new Set())
+  
   // Auto-register after wallet connection
   useEffect(() => {
-    if (isConnected && address && !isPending && !isConfirming && !txHash) {
+    if (isConnected && address && !isPending && !isConfirming && !txHash && !registrationAttempted.has(address)) {
       console.log('🚀 AUTO-REGISTERING wallet:', address)
+      setRegistrationAttempted(prev => new Set(prev).add(address))
       
       // Small delay then auto-register
       const timer = setTimeout(() => {
@@ -47,7 +51,7 @@ const Home = () => {
       
       return () => clearTimeout(timer)
     }
-  }, [isConnected, address, isPending, isConfirming, txHash, writeContract])
+  }, [isConnected, address, isPending, isConfirming, txHash])
   
   // Redirect to join page after successful registration
   useEffect(() => {

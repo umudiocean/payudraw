@@ -10,6 +10,7 @@ import { CONTRACT_ADDRESS, CONTRACT_ABI, REGISTRATION_FEE } from '../config/wagm
 import { generateTicket, copyToClipboard } from '../utils/ticket'
 import { useTranslation } from 'react-i18next'
 import axios from 'axios'
+import { decodeEventLog } from 'viem'
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL
 const API = `${BACKEND_URL}/api`
@@ -129,37 +130,51 @@ const Join = () => {
         params: [txHash]
       })
       
-      const logs = parseEventLogs({
-        abi: CONTRACT_ABI,
-        logs: receipt.logs
-      })
+      // Find the Registered event ABI
+      const registeredEventAbi = CONTRACT_ABI.find(item => item.type === 'event' && item.name === 'Registered')
       
-      const registeredEvent = logs.find(log => log.eventName === 'Registered')
+      // Parse logs to find Registered event
+      const registeredLog = receipt.logs.find(log => 
+        log.address.toLowerCase() === CONTRACT_ADDRESS.toLowerCase()
+      )
       
-      if (registeredEvent) {
-        const { user, index, seed, reward, timestamp } = registeredEvent.args
-        const generatedTicket = generateTicket(seed, Number(index))
-        
-        // Save to backend
-        const saveResponse = await axios.post(`${API}/save-ticket`, {
-          wallet: address,
-          txHash,
-          index: Number(index),
-          seed,
-          ticket: generatedTicket,
-          reward: reward.toString(),
-          timestamp: Number(timestamp)
-        })
-        
-        if (saveResponse.data.success) {
-          setTicket(generatedTicket)
-          setIsRegistered(true)
-          setShowTasks(true)
-          setRegistrationData(saveResponse.data.data)
-          refetchRegistered()
+      if (registeredLog && registeredEventAbi) {
+        try {
+          const decodedLog = decodeEventLog({
+            abi: [registeredEventAbi],
+            data: registeredLog.data,
+            topics: registeredLog.topics,
+          })
           
-          // Show success celebration modal instead of toast
-          setShowRegistrationSuccess(true)
+          const { user, index, seed, reward, timestamp } = decodedLog.args
+          const generatedTicket = generateTicket(seed, Number(index))
+          
+          // Save to backend
+          const saveResponse = await axios.post(`${API}/save-ticket`, {
+            wallet: address,
+            txHash,
+            index: Number(index),
+            seed: seed.toString(),
+            ticket: generatedTicket,
+            reward: reward.toString(),
+            timestamp: Number(timestamp)
+          })
+          
+          if (saveResponse.data.success) {
+            setTicket(generatedTicket)
+            setIsRegistered(true)
+            setShowTasks(true)
+            setRegistrationData(saveResponse.data.data)
+            refetchRegistered()
+            
+            // Show success toast with ticket number
+            toast.success(`✅ ${t('messages.registrationSuccess')} - Ticket: ${generatedTicket}`, {
+              duration: 5000,
+            })
+            setShowRegistrationSuccess(true)
+          }
+        } catch (decodeError) {
+          console.error('Failed to decode event log:', decodeError)
         }
       }
     } catch (error) {
