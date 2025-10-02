@@ -188,7 +188,7 @@ async def get_task_history(wallet: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 # Admin verification helper
-def verify_admin(wallet_address: str) -> bool:
+def verify_admin(wallet_address: Optional[str]) -> bool:
     """Verify if the wallet address is admin"""
     if not wallet_address:
         return False
