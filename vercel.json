@@ -1,17 +1,26 @@
 {
-  "buildCommand": "npm run build",
-  "outputDirectory": "frontend/build",
-  "installCommand": "npm run install",
-  "functions": {
-    "api/**/*.py": {
-      "memory": 1024,
-      "maxDuration": 30
-    }
-  },
-  "rewrites": [
+  "version": 2,
+  "builds": [
     {
-      "source": "/api/:path*",
-      "destination": "/api/index"
+      "src": "api/index.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "frontend/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "build"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "api/index.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "frontend/build/$1"
     }
   ]
 }
