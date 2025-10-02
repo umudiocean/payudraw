@@ -51,3 +51,8 @@ externalPort = 80
 [[ports]]
 localPort = 36867
 externalPort = 3000
+
+[deployment]
+deploymentTarget = "vm"
+run = ["bash", "-c", "cd backend && uvicorn server:app --host localhost --port 8001 & cd frontend && npx serve -s build -l 5000 -n"]
+build = ["bash", "-c", "cd frontend && npm run build"]
