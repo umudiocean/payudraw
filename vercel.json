@@ -1,12 +1,11 @@
 {
-  "version": 2,
-  "buildCommand": "cd frontend && npm install && npm run build",
+  "buildCommand": "cd frontend && npm run build",
   "outputDirectory": "frontend/build",
-  "devCommand": "cd frontend && npm start",
   "installCommand": "cd backend && pip install -r requirements.txt && cd ../frontend && npm install",
   "functions": {
     "api/**/*.py": {
-      "runtime": "python3.11"
+      "memory": 1024,
+      "maxDuration": 30
     }
   },
   "rewrites": [
