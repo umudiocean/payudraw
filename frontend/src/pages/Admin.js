@@ -8,8 +8,8 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import axios from 'axios'
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL
-const API = `${BACKEND_URL}/api`
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || ''
+const API = BACKEND_URL ? `${BACKEND_URL}/api` : '/api'
 const ADMIN_WALLET = '0xd9C4b8436d2a235A1f7DB09E680b5928cFdA641a'
 
 const Admin = () => {

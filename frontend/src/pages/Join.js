@@ -12,8 +12,8 @@ import { useTranslation } from 'react-i18next'
 import axios from 'axios'
 import { decodeEventLog } from 'viem'
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL
-const API = `${BACKEND_URL}/api`
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || ''
+const API = BACKEND_URL ? `${BACKEND_URL}/api` : '/api'
 
 const Join = () => {
   const { t } = useTranslation()
@@ -167,9 +167,10 @@ const Join = () => {
             setRegistrationData(saveResponse.data.data)
             refetchRegistered()
             
-            // Show success toast with ticket number
-            toast.success(`✅ ${t('messages.registrationSuccess')} - Ticket: ${generatedTicket}`, {
+            // Show success toast with ticket number and PAYU reward
+            toast.success(`🎉 Registration Successful!`, {
               duration: 5000,
+              description: `Ticket: ${generatedTicket} | 250M PAYU tokens sent! Complete tasks to earn more rewards.`
             })
             setShowRegistrationSuccess(true)
           }
