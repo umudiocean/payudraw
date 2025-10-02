@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "description": "PAYU Squid Game themed crypto giveaway platform",
   "scripts": {
-    "build": "cd frontend && npm install && npm run build",
+    "build": "cd frontend && npm run build",
+    "install": "cd frontend && npm install --legacy-peer-deps",
     "dev": "cd frontend && npm start"
   }
 }
