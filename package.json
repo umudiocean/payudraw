@@ -1,0 +1,9 @@
+{
+  "name": "payu-squid-game-giveaway",
+  "version": "1.0.0",
+  "description": "PAYU Squid Game themed crypto giveaway platform",
+  "scripts": {
+    "build": "cd frontend && npm install && npm run build",
+    "dev": "cd frontend && npm start"
+  }
+}

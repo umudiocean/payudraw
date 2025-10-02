@@ -1,7 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Header
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
@@ -9,15 +8,11 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
+import asyncpg
 
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
-
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
 
 # Admin wallet address (lowercase for comparison)
 ADMIN_WALLET = '0xd9C4b8436d2a235A1f7DB09E680b5928cFdA641a'.lower()
@@ -27,6 +22,9 @@ app = FastAPI()
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
+
+# Database connection pool
+db_pool = None
 
 
 # Define Models
@@ -70,122 +68,77 @@ class TaskClickCreate(BaseModel):
     platform: str
     handle: Optional[str] = None
 
-# Helper function to prepare data for MongoDB
-def prepare_for_mongo(data):
-    if isinstance(data, dict):
-        result = {}
-        for k, v in data.items():
-            if isinstance(v, datetime):
-                result[k] = v.isoformat()
-            else:
-                result[k] = v
-        return result
-    return data
 
-def parse_from_mongo(item):
-    if not item:
-        return item
+# Database initialization
+async def init_db():
+    global db_pool
+    database_url = os.environ.get('POSTGRES_URL', os.environ.get('DATABASE_URL'))
     
-    # Remove MongoDB's _id field to avoid ObjectId serialization issues
-    if '_id' in item:
-        del item['_id']
+    if not database_url:
+        logging.warning("No database URL found, using in-memory storage")
+        return
     
-    # Parse datetime strings back to datetime objects
-    if isinstance(item.get('created_at'), str):
-        item['created_at'] = datetime.fromisoformat(item['created_at'].replace('Z', '+00:00'))
-    if isinstance(item.get('clicked_at'), str):
-        item['clicked_at'] = datetime.fromisoformat(item['clicked_at'].replace('Z', '+00:00'))
-    if isinstance(item.get('timestamp'), str):
-        item['timestamp'] = datetime.fromisoformat(item['timestamp'].replace('Z', '+00:00'))
-    
-    return item
-
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
-async def root():
-    return {"message": "PAYU Draw API - Squid Game Edition"}
-
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.dict()
-    status_obj = StatusCheck(**status_dict)
-    prepared_data = prepare_for_mongo(status_obj.dict())
-    _ = await db.status_checks.insert_one(prepared_data)
-    return status_obj
-
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    status_checks = await db.status_checks.find().to_list(1000)
-    return [StatusCheck(**parse_from_mongo(status_check)) for status_check in status_checks]
-
-# Registration endpoints
-@api_router.post("/save-ticket")
-async def save_ticket(registration: TicketRegistrationCreate):
     try:
-        # Check if wallet already exists
-        existing = await db.registrations.find_one({"wallet": registration.wallet})
-        if existing:
-            return {"success": True, "message": "Already registered", "data": parse_from_mongo(existing)}
+        db_pool = await asyncpg.create_pool(database_url, min_size=1, max_size=10)
         
-        # Create new registration
-        reg_obj = TicketRegistration(
-            wallet=registration.wallet,
-            tx_hash=registration.txHash,
-            index=registration.index,
-            seed=registration.seed,
-            ticket=registration.ticket,
-            reward=registration.reward,
-            timestamp=registration.timestamp
-        )
+        # Create tables
+        async with db_pool.acquire() as conn:
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS registrations (
+                    id TEXT PRIMARY KEY,
+                    wallet TEXT UNIQUE NOT NULL,
+                    tx_hash TEXT NOT NULL,
+                    index INTEGER NOT NULL,
+                    seed TEXT NOT NULL,
+                    ticket TEXT NOT NULL,
+                    reward TEXT NOT NULL,
+                    timestamp BIGINT NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                )
+            ''')
+            
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS task_clicks (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    handle TEXT,
+                    clicked_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                )
+            ''')
+            
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS giveaway_settings (
+                    id TEXT PRIMARY KEY,
+                    started BOOLEAN DEFAULT FALSE,
+                    start_time TIMESTAMP WITH TIME ZONE
+                )
+            ''')
+            
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS status_checks (
+                    id TEXT PRIMARY KEY,
+                    client_name TEXT NOT NULL,
+                    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                )
+            ''')
         
-        prepared_data = prepare_for_mongo(reg_obj.dict())
-        await db.registrations.insert_one(prepared_data)
-        
-        return {"success": True, "message": "Registration saved", "data": reg_obj.dict()}
+        logging.info("Database initialized successfully")
     except Exception as e:
-        logging.error(f"Failed to save ticket: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error(f"Failed to initialize database: {e}")
+        db_pool = None
 
-@api_router.get("/registration/{wallet}")
-async def get_registration(wallet: str):
-    try:
-        registration = await db.registrations.find_one({"wallet": wallet})
-        if not registration:
-            return {"success": False, "message": "No registration found"}
-        
-        parsed_registration = parse_from_mongo(registration)
-        return {"success": True, "data": parsed_registration}
-    except Exception as e:
-        logging.error(f"Failed to get registration: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-# Task endpoints
-@api_router.post("/task-click")
-async def log_task_click(task: TaskClickCreate):
-    try:
-        task_obj = TaskClick(
-            user_id=task.wallet,
-            platform=task.platform,
-            handle=task.handle
-        )
-        
-        prepared_data = prepare_for_mongo(task_obj.dict())
-        await db.task_clicks.insert_one(prepared_data)
-        
-        return {"success": True, "message": "Task click logged"}
-    except Exception as e:
-        logging.error(f"Failed to log task click: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+@app.on_event("startup")
+async def startup():
+    await init_db()
 
-@api_router.get("/tasks/{wallet}")
-async def get_task_history(wallet: str):
-    try:
-        tasks = await db.task_clicks.find({"user_id": wallet}).to_list(100)
-        parsed_tasks = [parse_from_mongo(task) for task in tasks]
-        return {"success": True, "data": parsed_tasks}
-    except Exception as e:
-        logging.error(f"Failed to get task history: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+
+@app.on_event("shutdown")
+async def shutdown():
+    if db_pool:
+        await db_pool.close()
+
 
 # Admin verification helper
 def verify_admin(wallet_address: Optional[str]) -> bool:
@@ -193,7 +146,118 @@ def verify_admin(wallet_address: Optional[str]) -> bool:
     if not wallet_address:
         return False
     return wallet_address.lower() == ADMIN_WALLET
+
+
+# Add your routes to the router instead of directly to app
+@api_router.get("/")
+async def root():
+    return {"message": "PAYU Draw API - Squid Game Edition"}
+
+
+@api_router.post("/status")
+async def create_status_check(input: StatusCheckCreate):
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database not available")
     
+    status_id = str(uuid.uuid4())
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            'INSERT INTO status_checks (id, client_name) VALUES ($1, $2)',
+            status_id, input.client_name
+        )
+    
+    return {"id": status_id, "client_name": input.client_name}
+
+
+@api_router.get("/status")
+async def get_status_checks():
+    if not db_pool:
+        return []
+    
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch('SELECT * FROM status_checks ORDER BY timestamp DESC LIMIT 1000')
+        return [dict(row) for row in rows]
+
+
+# Registration endpoints
+@api_router.post("/save-ticket")
+async def save_ticket(registration: TicketRegistrationCreate):
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
+    try:
+        async with db_pool.acquire() as conn:
+            # Check if wallet already exists
+            existing = await conn.fetchrow('SELECT * FROM registrations WHERE wallet = $1', registration.wallet)
+            if existing:
+                return {"success": True, "message": "Already registered", "data": dict(existing)}
+            
+            # Create new registration
+            reg_id = str(uuid.uuid4())
+            await conn.execute('''
+                INSERT INTO registrations (id, wallet, tx_hash, index, seed, ticket, reward, timestamp)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ''', reg_id, registration.wallet, registration.txHash, registration.index, 
+               registration.seed, registration.ticket, registration.reward, registration.timestamp)
+            
+            new_reg = await conn.fetchrow('SELECT * FROM registrations WHERE id = $1', reg_id)
+            return {"success": True, "message": "Registration saved", "data": dict(new_reg)}
+    except Exception as e:
+        logging.error(f"Failed to save ticket: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.get("/registration/{wallet}")
+async def get_registration(wallet: str):
+    if not db_pool:
+        return {"success": False, "message": "Database not available"}
+    
+    try:
+        async with db_pool.acquire() as conn:
+            registration = await conn.fetchrow('SELECT * FROM registrations WHERE wallet = $1', wallet)
+            if not registration:
+                return {"success": False, "message": "No registration found"}
+            
+            return {"success": True, "data": dict(registration)}
+    except Exception as e:
+        logging.error(f"Failed to get registration: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Task endpoints
+@api_router.post("/task-click")
+async def log_task_click(task: TaskClickCreate):
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
+    try:
+        task_id = str(uuid.uuid4())
+        async with db_pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO task_clicks (id, user_id, platform, handle)
+                VALUES ($1, $2, $3, $4)
+            ''', task_id, task.wallet, task.platform, task.handle)
+        
+        return {"success": True, "message": "Task click logged"}
+    except Exception as e:
+        logging.error(f"Failed to log task click: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.get("/tasks/{wallet}")
+async def get_task_history(wallet: str):
+    if not db_pool:
+        return {"success": True, "data": []}
+    
+    try:
+        async with db_pool.acquire() as conn:
+            tasks = await conn.fetch('SELECT * FROM task_clicks WHERE user_id = $1', wallet)
+            return {"success": True, "data": [dict(task) for task in tasks]}
+    except Exception as e:
+        logging.error(f"Failed to get task history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Admin endpoints
 @api_router.get("/admin/registrations")
 async def get_all_registrations(x_wallet_address: Optional[str] = Header(None)):
@@ -201,27 +265,35 @@ async def get_all_registrations(x_wallet_address: Optional[str] = Header(None)):
     if not verify_admin(x_wallet_address):
         raise HTTPException(status_code=403, detail="Admin access required")
     
+    if not db_pool:
+        return {"success": True, "data": []}
+    
     try:
-        registrations = await db.registrations.find().to_list(10000)
-        parsed_registrations = [parse_from_mongo(reg) for reg in registrations]
-        return {"success": True, "data": parsed_registrations}
+        async with db_pool.acquire() as conn:
+            registrations = await conn.fetch('SELECT * FROM registrations ORDER BY created_at DESC')
+            return {"success": True, "data": [dict(reg) for reg in registrations]}
     except Exception as e:
         logging.error(f"Failed to get registrations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @api_router.get("/admin/tasks")
 async def get_all_tasks(x_wallet_address: Optional[str] = Header(None)):
     """Get all task completions (Admin only)"""
     if not verify_admin(x_wallet_address):
         raise HTTPException(status_code=403, detail="Admin access required")
-        
+    
+    if not db_pool:
+        return {"success": True, "data": []}
+    
     try:
-        tasks = await db.task_clicks.find().to_list(10000)
-        parsed_tasks = [parse_from_mongo(task) for task in tasks]
-        return {"success": True, "data": parsed_tasks}
+        async with db_pool.acquire() as conn:
+            tasks = await conn.fetch('SELECT * FROM task_clicks ORDER BY clicked_at DESC')
+            return {"success": True, "data": [dict(task) for task in tasks]}
     except Exception as e:
         logging.error(f"Failed to get tasks: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @api_router.post("/admin/start-giveaway")
 async def start_giveaway(x_wallet_address: Optional[str] = Header(None)):
@@ -229,28 +301,27 @@ async def start_giveaway(x_wallet_address: Optional[str] = Header(None)):
     if not verify_admin(x_wallet_address):
         raise HTTPException(status_code=403, detail="Admin access required")
     
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
     try:
-        # Check if giveaway settings exist
-        giveaway = await db.giveaway_settings.find_one({"_id": "main"})
-        
         start_time = datetime.now(timezone.utc)
         
-        if giveaway:
-            # Update existing
-            await db.giveaway_settings.update_one(
-                {"_id": "main"},
-                {"$set": {
-                    "started": True,
-                    "start_time": start_time.isoformat()
-                }}
-            )
-        else:
-            # Create new
-            await db.giveaway_settings.insert_one({
-                "_id": "main",
-                "started": True,
-                "start_time": start_time.isoformat()
-            })
+        async with db_pool.acquire() as conn:
+            # Check if giveaway settings exist
+            giveaway = await conn.fetchrow('SELECT * FROM giveaway_settings WHERE id = $1', 'main')
+            
+            if giveaway:
+                await conn.execute('''
+                    UPDATE giveaway_settings 
+                    SET started = TRUE, start_time = $1 
+                    WHERE id = $2
+                ''', start_time, 'main')
+            else:
+                await conn.execute('''
+                    INSERT INTO giveaway_settings (id, started, start_time)
+                    VALUES ($1, TRUE, $2)
+                ''', 'main', start_time)
         
         return {
             "success": True,
@@ -261,27 +332,29 @@ async def start_giveaway(x_wallet_address: Optional[str] = Header(None)):
         logging.error(f"Failed to start giveaway: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @api_router.get("/giveaway-status")
 async def get_giveaway_status():
     """Get giveaway status (public endpoint)"""
+    if not db_pool:
+        return {"success": True, "started": False, "start_time": None}
+    
     try:
-        giveaway = await db.giveaway_settings.find_one({"_id": "main"})
-        
-        if not giveaway:
+        async with db_pool.acquire() as conn:
+            giveaway = await conn.fetchrow('SELECT * FROM giveaway_settings WHERE id = $1', 'main')
+            
+            if not giveaway:
+                return {"success": True, "started": False, "start_time": None}
+            
             return {
                 "success": True,
-                "started": False,
-                "start_time": None
+                "started": giveaway.get("started", False),
+                "start_time": giveaway.get("start_time").isoformat() if giveaway.get("start_time") else None
             }
-        
-        return {
-            "success": True,
-            "started": giveaway.get("started", False),
-            "start_time": giveaway.get("start_time")
-        }
     except Exception as e:
         logging.error(f"Failed to get giveaway status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # Include the router in the main app
 app.include_router(api_router)
@@ -300,7 +373,3 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
