@@ -8,5 +8,5 @@ sys.path.insert(0, str(backend_path))
 from server import app
 from mangum import Mangum
 
-# Wrap FastAPI with Mangum for serverless
-handler = Mangum(app, lifespan="off")
+# Wrap FastAPI with Mangum - enable lifespan for database init
+handler = Mangum(app, lifespan="auto")
