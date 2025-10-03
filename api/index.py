@@ -1,12 +1,12 @@
 import sys
 from pathlib import Path
 
-# Add backend directory to Python path
+# Add backend to path
 backend_path = Path(__file__).parent.parent / "backend"
 sys.path.insert(0, str(backend_path))
 
-# Import the FastAPI app
 from server import app
+from mangum import Mangum
 
-# This is required for Vercel to recognize the ASGI app
-# Vercel automatically handles ASGI apps when they're named 'app'
+# Wrap FastAPI with Mangum for serverless
+handler = Mangum(app, lifespan="off")
