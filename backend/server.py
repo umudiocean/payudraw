@@ -1,6 +1,7 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Header
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 import os
 import logging
 from pathlib import Path
@@ -17,8 +18,7 @@ load_dotenv(ROOT_DIR / '.env')
 # Admin wallet address (lowercase for comparison)
 ADMIN_WALLET = '0xd9C4b8436d2a235A1f7DB09E680b5928cFdA641a'.lower()
 
-# Create the main app without a prefix
-app = FastAPI()
+# App will be created below with lifespan
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -129,15 +129,18 @@ async def init_db():
         db_pool = None
 
 
-@app.on_event("startup")
-async def startup():
+# Lifespan context manager for Vercel compatibility
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     await init_db()
-
-
-@app.on_event("shutdown")
-async def shutdown():
+    yield
+    # Shutdown
     if db_pool:
         await db_pool.close()
+
+# Update app with lifespan
+app = FastAPI(lifespan=lifespan)
 
 
 # Admin verification helper
@@ -356,9 +359,7 @@ async def get_giveaway_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Include the router in the main app
-app.include_router(api_router)
-
+# CORS must be added BEFORE including routers
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -366,6 +367,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include the router AFTER middleware
+app.include_router(api_router)
 
 # Configure logging
 logging.basicConfig(
